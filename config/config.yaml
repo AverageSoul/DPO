@@ -20,6 +20,9 @@ fsdp_port: null
 datasets:
 - hh
 
+# Optional local HH directory; null loads Anthropic/hh-rlhf from the Hub
+dataset_path: null
+
 # wandb configuration
 wandb:
   enabled: true
@@ -85,7 +88,7 @@ warmup_steps: 150
 # whether or not to use activation/gradient checkpointing
 activation_checkpointing: false
 
-# evaluate and save model every eval_every steps
+# evaluate and save model every eval_every training examples (not optimizer steps)
 eval_every: 20_000
 
 # prevent wandb from logging more than once per minimum_log_interval_secs

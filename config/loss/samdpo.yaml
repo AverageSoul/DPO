@@ -1,0 +1,11 @@
+name: samdpo
+beta: 0.1
+label_smoothing: 0.0
+reference_free: false
+resume: null
+sam:
+  reg_weight: 0.01
+  sketch_dim: 16
+  refresh_interval: 100
+  orth_eps: 1.0e-6
+  seed: 0

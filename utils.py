@@ -85,7 +85,7 @@ def all_gather_if_needed(values: torch.Tensor, rank: int, world_size: int) -> to
     if world_size == 1:
         return values
 
-    all_values = [torch.empty_like(values).to(rank) for _ in range(world_size)]
+    all_values = [torch.empty_like(values) for _ in range(world_size)]
     dist.all_gather(all_values, values)
     cat_function = torch.cat if values.dim() > 0 else torch.stack
     return cat_function(all_values, dim=0)
@@ -149,6 +149,8 @@ def init_distributed(rank: int, world_size: int, master_addr: str = 'localhost',
     print(rank, 'initializing distributed')
     os.environ["MASTER_ADDR"] = master_addr
     os.environ["MASTER_PORT"] = str(port)
+    if os.name == 'nt':
+        os.environ.setdefault('USE_LIBUV', '0')
     dist.init_process_group(backend, rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 

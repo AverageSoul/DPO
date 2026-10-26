@@ -1,4 +1,6 @@
 import datasets
+from functools import lru_cache
+from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, Dataset
 from utils import get_local_dir, TemporarilySeededRandom
@@ -117,7 +119,40 @@ def get_shp(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str
     return data
 
 
-def get_hh(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
+def load_hh_split(split, cache_dir=None, dataset_path=None):
+    """Load HH from the Hub or an explicit local directory."""
+    if dataset_path is None:
+        return datasets.load_dataset('Anthropic/hh-rlhf', split=split, cache_dir=cache_dir)
+    root = Path(dataset_path).expanduser()
+    if not root.is_dir():
+        raise ValueError(f"HH dataset directory does not exist: {root}")
+    if (root / 'dataset_dict.json').is_file():
+        return datasets.load_from_disk(str(root))[split]
+    split_root = root / split
+    if (split_root / 'state.json').is_file():
+        return datasets.load_from_disk(str(split_root))
+    if (root / 'state.json').is_file():
+        raise ValueError('dataset_path must contain both train and test splits, not a single saved Dataset')
+    # Raw HH snapshots contain train.json.gz/test.json.gz in category directories.
+    files = sorted(str(p) for p in root.rglob('*')
+                   if p.is_file() and p.name in (f'{split}.json', f'{split}.json.gz',
+                                                f'{split}.jsonl', f'{split}.jsonl.gz'))
+    if files:
+        return datasets.load_dataset('json', data_files={split: files}, split=split,
+                                     cache_dir=cache_dir)
+    return datasets.load_dataset(str(root), split=split, cache_dir=cache_dir)
+
+
+@lru_cache(maxsize=2)
+def get_audited_hh_splits(cache_dir=None, dataset_path=None):
+    """Keep test prompts held out and avoid counting duplicate test pairs."""
+    from hh_split_audit import audit_hh_splits
+    train = load_hh_split('train', cache_dir=cache_dir, dataset_path=dataset_path)
+    test = load_hh_split('test', cache_dir=cache_dir, dataset_path=dataset_path)
+    return audit_hh_splits(train, test)
+
+
+def get_hh(split: str, silent: bool = False, cache_dir: str = None, dataset_path: str = None) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
     """Load the Anthropic Helpful-Harmless dataset from Huggingface and convert it to the necessary format.
     
        The dataset is converted to a dictionary with the following structure:
@@ -139,14 +174,15 @@ def get_hh(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str,
        For this dataset, the sft_target is just the chosen response.
     """
     print(f'Loading HH dataset ({split} split) from Huggingface...')
-    dataset = datasets.load_dataset('Anthropic/hh-rlhf', split=split, cache_dir=cache_dir)
+    splits, audit = get_audited_hh_splits(cache_dir=cache_dir, dataset_path=dataset_path)
+    dataset = splits[split]
+    if not silent:
+        print(f'HH split audit: {audit}')
     print('done')
 
     def split_prompt_and_responses(ex):
-        prompt = extract_anthropic_prompt(ex['chosen'])
-        chosen_response = ex['chosen'][len(prompt):]
-        rejected_response = ex['rejected'][len(prompt):]
-        return prompt, chosen_response, rejected_response
+        from hh_split_audit import split_hh_row
+        return split_hh_row(ex)
 
     data = defaultdict(lambda: defaultdict(list))
     for row in tqdm.tqdm(dataset, desc='Processing HH', disable=silent):
@@ -159,16 +195,17 @@ def get_hh(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str,
 
     return data
 
-def get_hh_pairwise_noise(split: str, silent: bool = False, cache_dir: str = None, noise_rate=0.) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
+def get_hh_pairwise_noise(split: str, silent: bool = False, cache_dir: str = None, noise_rate=0., dataset_path: str = None) -> Dict[str, Dict[str, Union[List[Tuple[int, int]], List[str], str]]]:
     print(f'Loading HH dataset ({split} split) from Huggingface...')
-    dataset = datasets.load_dataset('Anthropic/hh-rlhf', split=split, cache_dir=cache_dir)
+    splits, audit = get_audited_hh_splits(cache_dir=cache_dir, dataset_path=dataset_path)
+    dataset = splits[split]
+    if not silent:
+        print(f'HH split audit: {audit}')
     print('done')
 
     def split_prompt_and_responses(ex):
-        prompt = extract_anthropic_prompt(ex['chosen'])
-        chosen_response = ex['chosen'][len(prompt):]
-        rejected_response = ex['rejected'][len(prompt):]
-        return prompt, chosen_response, rejected_response
+        from hh_split_audit import split_hh_row
+        return split_hh_row(ex)
 
     data = defaultdict(lambda: defaultdict(list))
     cnt_noise = 0
@@ -191,14 +228,16 @@ def get_hh_pairwise_noise(split: str, silent: bool = False, cache_dir: str = Non
     print("{} NOISE RATIO:\t, len(dataset) is {}\t len(noise) is {}".format(split, len(dataset), cnt_noise), cnt_noise / len(dataset))
     return data
 
-def get_dataset(name: str, split: str, silent: bool = False, cache_dir: str = None, noise_rate=0.):
+def get_dataset(name: str, split: str, silent: bool = False, cache_dir: str = None, noise_rate=0., dataset_path: str = None):
     """Load the given dataset by name. Supported by default are 'shp', 'hh', and 'se'."""
+    if dataset_path is not None and name not in ('hh', 'hh_pairwise_noise'):
+        raise ValueError('dataset_path is supported only for hh and hh_pairwise_noise')
     if name == 'shp':
         data = get_shp(split, silent=silent, cache_dir=cache_dir)
     elif name == 'hh':
-        data = get_hh(split, silent=silent, cache_dir=cache_dir)
+        data = get_hh(split, silent=silent, cache_dir=cache_dir, dataset_path=dataset_path)
     elif name == 'hh_pairwise_noise':
-        data = get_hh_pairwise_noise(split, silent=silent, cache_dir=cache_dir, noise_rate=noise_rate)
+        data = get_hh_pairwise_noise(split, silent=silent, cache_dir=cache_dir, noise_rate=noise_rate, dataset_path=dataset_path)
     elif name == 'se':
         data = get_se(split, silent=silent, cache_dir=cache_dir)
     else:
@@ -323,7 +362,8 @@ def get_batch_iterator(names: List[str],
                        seed:int = 0,
                        silent: bool = False,
                        cache_dir: Optional[str] = None,
-                       noise_rate=0.) -> Iterator[Dict]:
+                       noise_rate=0.,
+                       dataset_path: Optional[str] = None) -> Iterator[Dict]:
     """Get an iterator over batches of data. Stops after n_epochs or n_examples, whichever comes first.
 
     Args:
@@ -347,11 +387,11 @@ def get_batch_iterator(names: List[str],
         datasets.logging.set_verbosity_error()
 
     with TemporarilySeededRandom(seed):
-        permutation_seeds = iter(np.random.randint(0, 2**32, size=1000000))
+        permutation_seeds = iter(np.random.randint(0, 2**32, size=1000000, dtype=np.int64))
         flat_data = []
         for name in names:
             truncation_mode = 'keep_end' if name == 'hh' else 'keep_start'
-            for prompt, data in get_dataset(name, split, silent=silent, cache_dir=cache_dir, noise_rate=noise_rate).items():
+            for prompt, data in get_dataset(name, split, silent=silent, cache_dir=cache_dir, noise_rate=noise_rate, dataset_path=dataset_path).items():
                 flat_data.append((prompt, data['responses'], data['pairs'], data['sft_target'], truncation_mode))
 
     collate_fn = get_collate_fn(tokenizer)
@@ -365,7 +405,7 @@ def get_batch_iterator(names: List[str],
                 print(f'Finished generating {n_epochs} epochs on {split} split')
             break
         if shuffle:
-            with TemporarilySeededRandom(next(permutation_seeds)):
+            with TemporarilySeededRandom(int(next(permutation_seeds))):
                 random.shuffle(flat_data)
 
         batch = []

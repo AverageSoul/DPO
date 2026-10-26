@@ -1,0 +1,48 @@
+# Training logs and generated outputs
+log/
+logs/
+output/
+outputs/
+wandb/
+multirun/
+*.log
+*.log.*
+*.log~
+*.logk
+events.out.tfevents.*
+
+# Generated reports and extracted reference text
+/reports/
+/pdf_text.txt
+
+# Model/dataset caches and checkpoints
+.cache/
+checkpoints/
+checkpoint-*/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Python environments and caches
+.test-venv/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local credentials and editor/OS files
+.env
+.env.*
+!.env.example
+!.env.sample
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
